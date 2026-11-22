@@ -38,7 +38,9 @@ func initWordSeek(bot *td.Client) {
 	for _, n := range []int{4, 5, 6} {
 		common, _ := wordSeekData.ReadFile(fmt.Sprintf("wordseek/data/common-%d.json", n))
 		all, _ := wordSeekData.ReadFile(fmt.Sprintf("wordseek/data/all-%d.json", n))
-		_ = json.Unmarshal(common, &wordSeekLists[n])
+		var commonWords []string
+		_ = json.Unmarshal(common, &commonWords)
+		wordSeekLists[n] = commonWords
 		var words []string
 		_ = json.Unmarshal(all, &words)
 		wordSeekValid[n] = map[string]bool{}
@@ -185,7 +187,7 @@ func wordSeekGuessHandler(c *td.Client, u *td.UpdateNewMessage) error {
 	}
 	return sendWS(c, u.Message, fmt.Sprintf("🔤 %d/%d guesses\n%s", len(guesses), 30, strings.Join(lines, "\n")))
 }
-func optionsWS() *options.FindOptions {
+func optionsWS() *options.FindOptionsBuilder {
 	return options.Find().SetSort(bson.D{{Key: "createdAt", Value: 1}})
 }
 func wordSeekFeedback(guess, solution string) string {
