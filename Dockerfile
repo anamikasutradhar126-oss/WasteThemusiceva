@@ -49,6 +49,8 @@ ENV LD_LIBRARY_PATH=/app:$LD_LIBRARY_PATH
 ENV TDJSON_PATH=/app/libtdjson.so.1.8.66
 
 RUN useradd -r -u 10001 appuser && \
+    (getent group 1000 >/dev/null || groupadd -g 1000 render-secrets) && \
+    usermod -a -G 1000 appuser && \
     mkdir -p /app && \
     chown -R appuser:appuser /app
 

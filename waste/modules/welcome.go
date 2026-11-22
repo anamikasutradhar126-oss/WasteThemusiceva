@@ -19,7 +19,7 @@ import (
 	"WasteMusic/waste/utils"
 )
 
-const welcomeCaption = `𐙚 ᴡᴇʟᴄᴏᴍᴇ ǫᴛ / ǫᴛᴀ {chatname}
+const welcomeCaption = `<blockquote>𐙚 ᴡᴇʟᴄᴏᴍᴇ ǫᴛ / ǫᴛᴀ {chatname}
 
 ♡ ❤️
 🤩 ɴᴀᴍᴇ : {fullname}
@@ -27,7 +27,7 @@ const welcomeCaption = `𐙚 ᴡᴇʟᴄᴏᴍᴇ ǫᴛ / ǫᴛᴀ {chatname}
 😊 ᴜsᴇʀɴᴀᴍᴇ : {username}
 💗 ᴜsᴇʀ ɪᴅ : {id}
 
-୨୧ ᴛʜᴀɴᴋ ʏᴏᴜ ғᴏʀ ᴊᴏɪɴɪɴɢ ᴏᴜʀ ʟɪᴛᴛʟᴇ ᴡᴏʀʟᴅ! 💐`
+୨୧ ᴛʜᴀɴᴋ ʏᴏᴜ ғᴏʀ ᴊᴏɪɴɪɴɢ ᴏᴜʀ ʟɪᴛᴛʟᴇ ᴡᴏʀʟᴅ! 💐</blockquote>`
 
 const addedCaption = `𝘏𝘦𝘺 {bot}, 👋
 
@@ -87,8 +87,95 @@ func welcomeToggleHandler(c *td.Client, m *td.Message) error {
 }
 
 func registerWelcomeHandlers(bot *td.Client) {
+	// Keep the member-update handler for normal membership changes, but also
+	// listen for Telegram's service messages. Depending on how the member
+	// joined (invite link, join request approval, or direct add), TDLib can
+	// deliver the event as a service message instead of UpdateChatMember.
 	bot.OnUpdateChatMember(welcomeChatMemberHandler, nil)
 	bot.OnUpdateNewChatJoinRequest(joinRequestHandler, nil)
+	bot.OnMessage(welcomeServiceMessageHandler, welcomeServiceMessageFilter)
+}
+
+func welcomeServiceMessageFilter(m *td.Message) bool {
+	if m == nil || m.ChatID() == 0 {
+		return false
+	}
+
+	switch m.Content.(type) {
+	case *td.MessageChatAddMembers,
+		*td.MessageChatJoinByLink,
+		*td.MessageChatJoinByRequest:
+		return true
+	default:
+		return false
+	}
+}
+
+func welcomeServiceMessageHandler(c *td.Client, m *td.Message) error {
+	if m == nil || m.ChatID() == 0 {
+		return nil
+	}
+
+	// Don't run in channels/private chats.
+	chat, err := c.GetChat(m.ChatID())
+	if err != nil || chat == nil {
+		return nil
+	}
+	if t, ok := chat.Type.(*td.ChatTypeSupergroup); ok && t.IsChannel {
+		return nil
+	}
+	if _, ok := chat.Type.(*td.ChatTypePrivate); ok {
+		return nil
+	}
+	if _, ok := chat.Type.(*td.ChatTypeSecret); ok {
+		return nil
+	}
+
+	enabled, err := database.IsWelcomeEnabled(m.ChatID())
+	if err != nil || !enabled {
+		return nil
+	}
+
+	userIDs := make([]int64, 0, 1)
+	switch content := m.Content.(type) {
+	case *td.MessageChatAddMembers:
+		userIDs = append(userIDs, content.MemberUserIds...)
+	case *td.MessageChatJoinByLink, *td.MessageChatJoinByRequest:
+		if id := m.SenderID(); id != 0 {
+			userIDs = append(userIDs, id)
+		}
+	}
+
+	for _, userID := range userIDs {
+		if userID == 0 || (c.Me != nil && userID == c.Me.Id) {
+			continue
+		}
+
+		user, err := c.GetUser(userID)
+		if err != nil || user == nil {
+			continue
+		}
+
+		caption := buildWelcomeCaption(chat.Title, user)
+		if _, err := c.SendVideo(m.ChatID(), td.InputFileRemote{Id: config.WelcomeVideoURL}, &td.SendVideoOpts{
+			Caption:           caption,
+			ParseMode:         td.ParseModeHTML,
+			SupportsStreaming: true,
+			ReplyMarkup:       core.GetWelcomeMarkup(m.ChatID()),
+		}); err == nil {
+			continue
+		}
+
+		// Video may be unavailable; still send the welcome text/buttons.
+		if _, err := c.SendTextMessage(m.ChatID(), caption, &td.SendTextMessageOpts{
+			ParseMode:   td.ParseModeHTML,
+			ReplyMarkup: core.GetWelcomeMarkup(m.ChatID()),
+		}); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func welcomeChatMemberHandler(c *td.Client, u *td.UpdateChatMember) error {

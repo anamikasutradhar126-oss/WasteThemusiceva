@@ -52,8 +52,16 @@ var (
 	SupportChat    = getEnv("SUPPORT_CHAT", "https://t.me/MeowClone")
 	SupportChannel = getEnv("SUPPORT_CHANNEL", "https://t.me/Meowcloner")
 	CookiesLink    = getEnv("COOKIES_LINK", "")
-	SetCmds        = getEnvBool("SET_CMDS", false)
-	MaxAuthUsers   = getEnvInt("MAX_AUTH_USERS", 25)
+	CookiesFile    = getEnv("COOKIES_FILE", "")
+
+	// ArtistBots API downloader (primary); yt-dlp cookies remain the fallback.
+	ArtistBotsAPIURL = getEnv("ARTISTBOTS_API_URL", "https://api.artistbotsapi.bond")
+	ArtistBotsKey    = getEnv("ARTISTBOTS_KEY", "")
+	EnableAPI        = getEnvBool("ENABLE_API", true)
+	APITimeout       = getEnvInt("API_TIMEOUT", 60)
+	APIStreamTimeout = getEnvInt("API_STREAM_TIMEOUT", 300)
+	SetCmds          = getEnvBool("SET_CMDS", false)
+	MaxAuthUsers     = getEnvInt("MAX_AUTH_USERS", 25)
 
 	StartImages = getEnvStrings("START_IMAGES")
 

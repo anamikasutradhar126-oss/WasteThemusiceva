@@ -38,17 +38,25 @@ func (s *ShrutiPlatform) Get(_ string, _ bool) ([]*state.Track, error) {
 }
 
 func (s *ShrutiPlatform) CanDownload(source state.PlatformName) bool {
-	return source == PlatformYouTube || source == PlatformYtDlp
+	// Shruti is optional. When no API key is configured, do not register
+	// Shruti as a downloader at all; the normal platform downloader
+	// (yt-dlp) will handle YouTube directly without an API key.
+	if source != PlatformYouTube && source != PlatformYtDlp {
+		return false
+	}
+
+	apiKey := strings.TrimSpace(os.Getenv("SHRUTI_API_KEY"))
+	return apiKey != "" && apiKey != "YOUR_API_KEY"
 }
 
-func (s *ShrutiPlatform) Download(ctx context.Context, track *state.Track, _ *td.Message) (string, error) {
+func (s *ShrutiPlatform) Download(ctx context.Context, track *state.Track, msg *td.Message) (string, error) {
 	if track == nil || track.URL == "" {
 		return "", errors.New("empty track URL")
 	}
 
 	apiKey := strings.TrimSpace(os.Getenv("SHRUTI_API_KEY"))
 	if apiKey == "" || apiKey == "YOUR_API_KEY" {
-		return "", errors.New("SHRUTI_API_KEY is not configured")
+		return "", errors.New("Shruti disabled: no API key configured; use yt-dlp")
 	}
 
 	base := strings.TrimRight(strings.TrimSpace(os.Getenv("SHRUTI_API_URL")), "/")

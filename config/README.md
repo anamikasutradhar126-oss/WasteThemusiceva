@@ -1,77 +1,52 @@
-# ⚙️ Configuration Guide
+# 🍪 YouTube Cookies Guide
 
-This document describes all configuration variables used in WasteMusic. These can be set as environment variables or in a `.env` file in the project root.
+This system allows `yt-dlp` to authenticate with YouTube, bypassing age restrictions, region locks, and bot detection.
 
-## 🚀 Flexible Loading
+## 🚀 Setup Methods
 
-The configuration loader is designed to be forgiving with naming. For any variable listed below, you can use:
-- **UPPER_CASE** (e.g., `API_ID`)
-- **lower_case** (e.g., `api_id`)
-- **No Underscores** (e.g., `APIID`)
+### Method 1: Remote via Batbin (Recommended)
 
-## 🔴 Required Variables
+This method keeps your sensitive cookies out of your Git history and allows for easy updates.
 
-These must be set for the bot to start.
+1. **Export Cookies:** Use a browser extension like [Get cookies.txt](https://chrome.google.com/webstore/detail/get-cookiestxt/) to export your YouTube cookies in Netscape format.
+2. **Upload to Batbin:** Paste the cookie text into [batbin.me](https://batbin.me) and create a paste.
+3. **Configure Bot:** Copy the paste link and set it in your environment:
+   ```bash
+   COOKIES_LINK="https://batbin.me/paste_id"
+   ```
+   *Note: You can provide multiple space-separated URLs for load balancing.*
 
-| Variable | Type | Description |
-| :--- | :--- | :--- |
-| `API_ID` | `int32` | Your Telegram API ID from [my.telegram.org](https://my.telegram.org). |
-| `API_HASH` | `string` | Your Telegram API Hash from [my.telegram.org](https://my.telegram.org). |
-| `TOKEN` | `string` | Your Telegram Bot Token from [@BotFather](https://t.me/BotFather). Also accepts `BOT_TOKEN`. |
-| `MONGO_DB_URI` | `string` | MongoDB connection string (e.g., `mongodb+srv://...`). |
-| `STRING_SESSIONS`| `[]string`| Space, comma, or semicolon separated session strings for assistant accounts. Also accepts `STRING_SESSION`. |
+### Method 2: Render Secret File (Private / Recommended for Render)
 
-## 🟢 Assistant Configuration
+1. In your Render service, open **Environment** → **Secret Files** → **Add Secret File**.
+2. Set the filename to `cookies.txt` and paste the Netscape-format cookie contents.
+3. Add this environment variable to the same service:
+   ```bash
+   COOKIES_FILE=/etc/secrets/cookies.txt
+   ```
+4. Save changes and deploy. The Docker image is configured to let `appuser` read Render's secret-file group (GID 1000).
 
-| Variable | Default | Options | Description |
-| :--- | :--- | :--- | :--- |
-| `SESSION_TYPE` | `pyrogram` | `pyrogram`, `telethon`, `gogram` | The library used to generate your `STRING_SESSIONS`. This **must** match the session format. |
+The application reads this file directly; it does not copy the cookie contents into the repository or image.
 
-## 👑 Ownership
+### Method 3: Manual Local Files
 
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `OWNER_ID` | `0` | The Telegram User ID of the bot owner. Grants full administrative access. |
+Place any Netscape-formatted cookie file directly into the `config/cookies/` directory with a `.txt` extension. The bot automatically detects and uses all `.txt` files in this folder.
 
-## 🎵 External APIs (Optional)
+## 🛠️ Troubleshooting
 
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `SPOTIFY_CLIENT_ID` | `None` | Spotify API Client ID for metadata resolution. |
-| `SPOTIFY_CLIENT_SECRET` | `None` | Spotify API Client Secret for metadata resolution. |
-| `FALLEN_API_KEY` | `""` | API Key for [Fallen API](https://beta.fallenapi.fun) YouTube downloader. |
-| `FALLEN_API_URL` | `https://beta.fallenapi.fun` | Base URL for Fallen API. |
+### "Sign in to confirm you're not a bot"
+This usually means your cookies have expired or were exported incorrectly.
+- **Solution:** Re-export fresh cookies from your browser and update your Batbin paste or local files.
 
-## 🛠️ Bot Behavior & Limits
+### "No cookie files found"
+The bot couldn't find any valid `.txt` files in `config/cookies/`.
+- **Solution:** Verify that your `COOKIES_LINK` is correct or that your local files have the `.txt` extension and are not named `example.txt`.
 
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `DEFAULT_LANG` | `en` | Default language for bot responses (see `waste/locales/`). |
-| `DURATION_LIMIT` | `4200` | Maximum track duration in seconds (70 minutes). |
-| `QUEUE_LIMIT` | `24` | Maximum number of tracks in queue per chat. |
-| `MAX_AUTH_USERS` | `25` | Max number of non-admin users allowed to control playback. |
-| `LEAVE_ON_DEMOTED`| `false` | If `true`, the bot leaves the group if its admin rights are removed. |
-| `SET_CMDS` | `false` | Automatically set bot commands in Telegram UI on startup. |
-| `DISABLE_COLOUR` | `false` | If `true`, disables Telegram inline button colour styling (`Primary/Success/Danger`). |
-| `COOKIES_LINK` | `""` | URL to a `yt-dlp` cookies file (e.g., via batbin). |
-| `LOGGER_ID` | `0` | Chat ID where the bot will send logs and error reports. Also accepts `LOG_GROUP_ID`. If unset, logging-to-chat is disabled. |
+## 💡 Best Practices
 
-## 🎨 Customization
-
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-|`EFFECT_IDS`| `""` | List of Telegram message effect IDs (space/comma/semicolon separated). One random effect ID is selected and applied when the `/start` command is used. These effects are shown visually by Telegram (e.g., animations). If you're unsure what to use, try `5104841245755180586` and run `/start` to see an example effect.|
-| `START_IMAGES` | `""` | Start images list (space/comma/semicolon separated URLs). If multiple URLs are provided, one is chosen randomly for each `/start`. |
-| `PING_IMG_URL` | `https://...` | Image URL displayed in the `/ping` command response. |
-| `SUPPORT_CHAT` | `https://t.me/MeowClone` | **Full URL** to the support group. |
-| `SUPPORT_CHANNEL`| `https://t.me/Meowcloner` | **Full URL** to the announcement channel. |
-
-## 🖥️ System Settings
-
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `PORT` | `8000` | Port for the internal debug pprof server. |
-| `LOG_FILE` | `logs.txt` | Filename for system logs. |
+- **Security:** Never commit your real cookie files to Git or publish them in a public paste. On Render, use a Secret File with `COOKIES_FILE`.
+- **Maintenance:** YouTube cookies expire periodically. Refresh them every 2-4 days or if you notice download failures.
+- **Redundancy:** Use multiple cookie files from different accounts to avoid rate limits.
 
 ---
-**Note:** Changes to the `.env` file or environment variables require a bot restart to take effect.
+**Note:** For more help, join our [Support Chat](https://t.me/MeowClone).

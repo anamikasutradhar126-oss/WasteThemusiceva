@@ -104,7 +104,19 @@ func langCallbackHandler(c *td.Client, u *td.UpdateNewCallbackQuery) error {
 			cur = config.DefaultLang
 		}
 		markup := buildLangMarkup(chatID, cur, true)
-		_, _ = u.EditMessageText(c, F(chatID, "lang_select"), &td.EditTextMessageOpts{
+		text := F(chatID, "lang_select")
+
+		// The welcome message is a video with a caption, so editing it as a
+		// text message fails silently. Try caption editing first; if the
+		// callback came from a normal text message, fall back to text editing.
+		if _, err := u.EditMessageCaption(c, text, &td.EditCaptionOpts{
+			ParseMode:   td.ParseModeHTML,
+			ReplyMarkup: markup,
+		}); err == nil {
+			return nil
+		}
+
+		_, _ = u.EditMessageText(c, text, &td.EditTextMessageOpts{
 			ParseMode:   td.ParseModeHTML,
 			ReplyMarkup: markup,
 		})
@@ -133,6 +145,8 @@ func langCallbackHandler(c *td.Client, u *td.UpdateNewCallbackQuery) error {
 
 	msg := F(chatID, "lang_success", locales.Arg{"lang_name": langName})
 	_ = u.Answer(c, 0, true, msg, "")
-	_, _ = u.EditMessageText(c, msg, &td.EditTextMessageOpts{ParseMode: td.ParseModeHTML})
+	if _, err := u.EditMessageCaption(c, msg, &td.EditCaptionOpts{ParseMode: td.ParseModeHTML}); err != nil {
+		_, _ = u.EditMessageText(c, msg, &td.EditTextMessageOpts{ParseMode: td.ParseModeHTML})
+	}
 	return nil
 }

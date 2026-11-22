@@ -20,6 +20,7 @@ package cookies
 import (
 	"fmt"
 	"math/rand"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -91,6 +92,19 @@ func loadCookieCache() error {
 			continue
 		}
 		filtered = append(filtered, f)
+	}
+
+	// Render Secret Files are mounted at /etc/secrets/<filename>.
+	// Add the configured file directly; never copy cookie contents into the image.
+	if secretPath := strings.TrimSpace(config.CookiesFile); secretPath != "" {
+		info, statErr := os.Stat(secretPath)
+		if statErr != nil {
+			return fmt.Errorf("configured COOKIES_FILE is not accessible")
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("configured COOKIES_FILE is not a regular file")
+		}
+		filtered = append(filtered, secretPath)
 	}
 
 	cachedFiles = filtered

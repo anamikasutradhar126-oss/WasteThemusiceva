@@ -31,6 +31,120 @@ import (
 
 var helpTexts = map[string]string{}
 
+// smallCapsHTML converts the visible help-menu text to the small-caps style
+// used in the requested design while preserving Telegram HTML tags/entities.
+func smallCapsHTML(s string) string {
+	// The existing English locale uses mathematical italic Unicode letters.
+	// Convert those back to normal Latin first so they can be rendered in the
+	// requested small-caps alphabet.
+	var out strings.Builder
+	r := []rune(s)
+	for i := 0; i < len(r); {
+		if r[i] == '<' {
+			j := i
+			for j < len(r) && r[j] != '>' {
+				j++
+			}
+			if j < len(r) {
+				out.WriteString(string(r[i : j+1]))
+				i = j + 1
+				continue
+			}
+		}
+		if r[i] == '&' {
+			j := i
+			for j < len(r) && r[j] != ';' && j-i < 12 {
+				j++
+			}
+			if j < len(r) && r[j] == ';' {
+				out.WriteString(string(r[i : j+1]))
+				i = j + 1
+				continue
+			}
+		}
+
+		ch := r[i]
+		// Mathematical Sans/Italic capital and small letters used by the old
+		// help_main locale string.
+		switch {
+		case ch >= 0x1D608 && ch <= 0x1D621:
+			ch = 'A' + (ch - 0x1D608)
+		case ch >= 0x1D622 && ch <= 0x1D63B:
+			ch = 'a' + (ch - 0x1D622)
+		}
+
+		switch ch {
+		case 'A', 'a':
+			out.WriteRune('ᴀ')
+		case 'B', 'b':
+			out.WriteRune('ʙ')
+		case 'C', 'c':
+			out.WriteRune('ᴄ')
+		case 'D', 'd':
+			out.WriteRune('ᴅ')
+		case 'E', 'e':
+			out.WriteRune('ᴇ')
+		case 'F', 'f':
+			out.WriteRune('ғ')
+		case 'G', 'g':
+			out.WriteRune('ɢ')
+		case 'H', 'h':
+			out.WriteRune('ʜ')
+		case 'I', 'i':
+			out.WriteRune('ɪ')
+		case 'J', 'j':
+			out.WriteRune('ᴊ')
+		case 'K', 'k':
+			out.WriteRune('ᴋ')
+		case 'L', 'l':
+			out.WriteRune('ʟ')
+		case 'M', 'm':
+			out.WriteRune('ᴍ')
+		case 'N', 'n':
+			out.WriteRune('ɴ')
+		case 'O', 'o':
+			out.WriteRune('ᴏ')
+		case 'P', 'p':
+			out.WriteRune('ᴘ')
+		case 'Q', 'q':
+			out.WriteRune('ǫ')
+		case 'R', 'r':
+			out.WriteRune('ʀ')
+		case 'S', 's':
+			out.WriteRune('s')
+		case 'T', 't':
+			out.WriteRune('ᴛ')
+		case 'U', 'u':
+			out.WriteRune('ᴜ')
+		case 'V', 'v':
+			out.WriteRune('ᴠ')
+		case 'W', 'w':
+			out.WriteRune('ᴡ')
+		case 'X', 'x':
+			out.WriteRune('x')
+		case 'Y', 'y':
+			out.WriteRune('ʏ')
+		case 'Z', 'z':
+			out.WriteRune('ᴢ')
+		default:
+			out.WriteRune(ch)
+		}
+		i++
+	}
+	return out.String()
+}
+
+func formatHelpMenu(chatID int64) string {
+	text := smallCapsHTML(F(chatID, "help_main"))
+	// The requested design is plain small-caps text, not the old italic/bold
+	// mathematical font. Keep the Telegram blockquote around the whole message.
+	text = strings.ReplaceAll(text, "<b>", "")
+	text = strings.ReplaceAll(text, "</b>", "")
+	text = strings.ReplaceAll(text, "<i>", "")
+	text = strings.ReplaceAll(text, "</i>", "")
+	return "<blockquote>" + text + "</blockquote>"
+}
+
 func init() {
 	helpTexts["/help"] = fmt.Sprintf(`ℹ️ <b>Help Command</b>
 <i>Displays general bot help or detailed information about a specific command.</i>
@@ -65,7 +179,7 @@ func helpHandler(c *td.Client, m *td.Message) error {
 		return err
 	}
 
-	caption := F(m.ChatID(), "help_main")
+	caption := formatHelpMenu(m.ChatID())
 	markup := core.GetHelpKeyboard(m.ChatID())
 
 	if video := config.HelpVideo(); video != "" {
@@ -107,11 +221,11 @@ func helpCB(c *td.Client, cb *td.UpdateNewCallbackQuery) error {
 	markup := core.GetHelpKeyboard(cb.ChatId)
 
 	if isCaptionMediaMessage(msg) {
-		_, err = cb.EditMessageCaption(c, F(cb.ChatId, "help_main"), &td.EditCaptionOpts{
+		_, err = cb.EditMessageCaption(c, formatHelpMenu(cb.ChatId), &td.EditCaptionOpts{
 			ReplyMarkup: markup,
 		})
 	} else {
-		_, err = cb.EditMessageText(c, F(cb.ChatId, "help_main"), &td.EditTextMessageOpts{
+		_, err = cb.EditMessageText(c, formatHelpMenu(cb.ChatId), &td.EditTextMessageOpts{
 			ReplyMarkup: markup,
 		})
 	}
@@ -135,31 +249,31 @@ func helpCallbackHandler(c *td.Client, cb *td.UpdateNewCallbackQuery) error {
 
 	switch parts[1] {
 	case "admin":
-		text = utils.StylizeHTML(F(chatID, "help_admin"))
+		text = "<blockquote>" + utils.StylizeHTML(F(chatID, "help_admin")) + "</blockquote>"
 	case "auth":
-		text = utils.StylizeHTML(F(chatID, "help_auth"))
+		text = "<blockquote>" + utils.StylizeHTML(F(chatID, "help_auth")) + "</blockquote>"
 	case "bcast":
-		text = utils.StylizeHTML(F(chatID, "help_bcast"))
+		text = "<blockquote>" + utils.StylizeHTML(F(chatID, "help_bcast")) + "</blockquote>"
 	case "play":
-		text = utils.StylizeHTML(F(chatID, "help_play"))
+		text = "<blockquote>" + utils.StylizeHTML(F(chatID, "help_play")) + "</blockquote>"
 	case "sudo":
-		text = utils.StylizeHTML(F(chatID, "help_sudo"))
+		text = "<blockquote>" + utils.StylizeHTML(F(chatID, "help_sudo")) + "</blockquote>"
 	case "restrict":
-		text = utils.StylizeHTML(F(chatID, "help_restrict"))
+		text = "<blockquote>" + utils.StylizeHTML(F(chatID, "help_restrict")) + "</blockquote>"
 	case "thumb":
-		text = utils.StylizeHTML(F(chatID, "help_thumb"))
+		text = "<blockquote>" + utils.StylizeHTML(F(chatID, "help_thumb")) + "</blockquote>"
 	case "start":
-		text = utils.StylizeHTML(F(chatID, "help_start"))
+		text = "<blockquote>" + utils.StylizeHTML(F(chatID, "help_start")) + "</blockquote>"
 	case "autoplay":
-		text = utils.StylizeHTML(F(chatID, "help_autoplay"))
+		text = "<blockquote>" + utils.StylizeHTML(F(chatID, "help_autoplay")) + "</blockquote>"
 	case "playlist":
-		text = utils.StylizeHTML(F(chatID, "help_playlist"))
+		text = "<blockquote>" + utils.StylizeHTML(F(chatID, "help_playlist")) + "</blockquote>"
 	case "vclogs":
-		text = utils.StylizeHTML(F(chatID, "help_vclogs"))
+		text = "<blockquote>" + utils.StylizeHTML(F(chatID, "help_vclogs")) + "</blockquote>"
 	case "inline":
-		text = utils.StylizeHTML(F(chatID, "help_inline"))
+		text = "<blockquote>" + utils.StylizeHTML(F(chatID, "help_inline")) + "</blockquote>"
 	case "main":
-		text = F(chatID, "help_main")
+		text = formatHelpMenu(chatID)
 		btn = core.GetHelpKeyboard(chatID)
 	}
 
@@ -200,7 +314,7 @@ func showHelpFor(c *td.Client, m *td.Message, cmd string) error {
 		return err
 	}
 
-	helpText = utils.StylizeHTML(helpText)
+	helpText = "<blockquote>" + utils.StylizeHTML(helpText) + "</blockquote>"
 	_, err := m.ReplyText(
 		c,
 		"📘 <b>Help for</b> <code>"+cmd+"</code>:\n\n"+helpText,

@@ -23,12 +23,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"WasteMusic/config/cookies"
 	"WasteMusic/waste/logger"
 
 	td "github.com/Kanha/Meow"
@@ -148,6 +152,95 @@ func (y *YtdlpPlatform) CanDownload(source state.PlatformName) bool {
 	return source == PlatformYtDlp || source == PlatformYouTube
 }
 
+func ytdlpCookieArgs() ([]string, func()) {
+	// yt-dlp may rewrite the cookie jar when it closes. Render Secret Files
+	// are read-only, so always give yt-dlp a private writable copy.
+	for _, key := range []string{"YTDLP_COOKIES_FILE", "COOKIES_FILE"} {
+		if p := strings.TrimSpace(os.Getenv(key)); p != "" {
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				logger.Infof("YtDlp: using cookie file from %s: %s", key, p)
+				return writableCookieArgs(p)
+			}
+			logger.Warnf("YtDlp: %s is set but cookie file was not found: %s", key, p)
+		}
+	}
+
+	if cookieFile, cookieErr := cookies.GetRandomCookieFile(); cookieErr == nil && strings.TrimSpace(cookieFile) != "" {
+		if st, err := os.Stat(cookieFile); err == nil && !st.IsDir() {
+			logger.Infof("YtDlp: using configured cookie file: %s", cookieFile)
+			return writableCookieArgs(cookieFile)
+		}
+		logger.Warnf("YtDlp: configured cookie path does not exist: %s", cookieFile)
+	} else if cookieErr != nil {
+		logger.Warnf("YtDlp: cookie manager error: %v", cookieErr)
+	}
+
+	matches, _ := filepath.Glob(filepath.Join("config", "cookies", "*.txt"))
+	for _, p := range matches {
+		if filepath.Base(p) == "example.txt" {
+			continue
+		}
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			logger.Infof("YtDlp: using local cookie file: %s", p)
+			return writableCookieArgs(p)
+		}
+	}
+
+	logger.Warn("YtDlp: NO YouTube cookie file available")
+	return nil, func() {}
+}
+
+// writableCookieArgs makes a private writable copy because yt-dlp can save
+// cookies during shutdown; mounted secret files must never be passed directly.
+func writableCookieArgs(source string) ([]string, func()) {
+	in, err := os.Open(source)
+	if err != nil {
+		logger.Warnf("YtDlp: cannot open cookie file: %v", err)
+		return nil, func() {}
+	}
+	defer in.Close()
+
+	out, err := os.CreateTemp("", "wastemusic-cookies-*.txt")
+	if err != nil {
+		logger.Warnf("YtDlp: cannot create writable cookie copy: %v", err)
+		return nil, func() {}
+	}
+	path := out.Name()
+	if err := out.Chmod(0600); err != nil {
+		out.Close()
+		os.Remove(path)
+		logger.Warnf("YtDlp: cannot secure cookie copy: %v", err)
+		return nil, func() {}
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(path)
+		logger.Warnf("YtDlp: cannot copy cookie file: %v", err)
+		return nil, func() {}
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(path)
+		logger.Warnf("YtDlp: cannot close cookie copy: %v", err)
+		return nil, func() {}
+	}
+	return []string{"--cookies", path}, func() { _ = os.Remove(path) }
+}
+
+func ytdlpJSRuntimeArgs() []string {
+	// Newer yt-dlp YouTube extraction may need a JS runtime and the
+	// EJS remote components. Prefer whatever runtime is actually installed.
+	for _, rt := range []string{"deno", "node", "bun"} {
+		if path, err := exec.LookPath(rt); err == nil {
+			args := []string{"--js-runtimes", rt + ":" + path}
+			// yt-dlp's EJS components are required by some current
+			// YouTube clients. This is harmless when already bundled.
+			args = append(args, "--remote-components", "ejs:github")
+			return args
+		}
+	}
+	return nil
+}
+
 func (y *YtdlpPlatform) Download(
 	ctx context.Context,
 	track *state.Track,
@@ -170,12 +263,18 @@ func (y *YtdlpPlatform) Download(
 		"--geo-bypass",
 		"--no-warnings",
 		"--no-check-certificate",
-		"--retries", "3",
-		"--fragment-retries", "3",
-		"--socket-timeout", "30",
-		"--js-runtimes", "deno:/usr/local/bin/deno",
+		"--retries", "2",
+		"--fragment-retries", "2",
+		"--socket-timeout", "15",
 		"-o", getPath(track, ".%(ext)s"),
 	}
+
+	baseArgs = append(baseArgs, ytdlpJSRuntimeArgs()...)
+
+	// YouTube may require authenticated cookies on cloud IPs.
+	cookieArgs, cleanupCookies := ytdlpCookieArgs()
+	defer cleanupCookies()
+	baseArgs = append(baseArgs, cookieArgs...)
 
 	if track.Video {
 		baseArgs = append(
@@ -186,24 +285,30 @@ func (y *YtdlpPlatform) Download(
 	} else {
 		baseArgs = append(
 			baseArgs,
-			"-f", "ba/b",
+			"-f", "ba[ext=m4a]/ba/b",
 			"-x",
 			"--audio-format", "mp3",
-			"--audio-quality", "0",
-			"--concurrent-fragments", "4",
+			// Quality 5 is a good voice-chat balance and is much faster to encode
+			// than VBR quality 0, with no noticeable loss for normal listening.
+			"--audio-quality", "5",
+			"--concurrent-fragments", "8",
 		)
 	}
 
-	baseArgs = append(
-		baseArgs,
-		"--sleep-requests", "1",
-		"--sleep-interval", "2",
-		"--max-sleep-interval", "5",
-	)
-
-	attempts := [][]string{
-		append([]string{}, baseArgs...),
-		append([]string{}, baseArgs...),
+	// YouTube can reject a cloud/Render IP depending on the client profile.
+	// Try a few yt-dlp client profiles; none of these require a user API key.
+	attempts := make([][]string, 0, 3)
+	clientArgs := []string{
+		"android,web_safari",
+		"tv,web_safari",
+		"",
+	}
+	for _, clients := range clientArgs {
+		attempt := append([]string{}, baseArgs...)
+		if clients != "" {
+			attempt = append(attempt, "--extractor-args", "youtube:player_client="+clients)
+		}
+		attempts = append(attempts, attempt)
 	}
 
 	var lastErr error
@@ -308,6 +413,15 @@ func (y *YtdlpPlatform) extractMetadata(
 		"--no-warnings",
 		"--no-check-certificate",
 	}
+	args = append(args, ytdlpJSRuntimeArgs()...)
+
+	cookieArgs, cleanupCookies := ytdlpCookieArgs()
+	defer cleanupCookies()
+	args = append(args, cookieArgs...)
+
+	args = append(args,
+		"--extractor-args", "youtube:player_client=android,web_safari",
+	)
 
 	args = append(args, "--", urlStr)
 
@@ -394,9 +508,7 @@ func (y *YtdlpPlatform) toTrack(
 ) *state.Track {
 
 	if video &&
-		audioOnlyExtractors[
-			strings.ToLower(info.Extractor),
-		] {
+		audioOnlyExtractors[strings.ToLower(info.Extractor)] {
 
 		video = false
 	}

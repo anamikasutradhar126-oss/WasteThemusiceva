@@ -18,13 +18,17 @@
 package platforms
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"strings"
 	"time"
 
+	"WasteMusic/config/cookies"
 	"WasteMusic/waste/logger"
 
 	td "github.com/Kanha/Meow"
@@ -245,12 +249,12 @@ func (p *YouTubePlatform) handleTrackURL(rawURL string) ([]*state.Track, error) 
 			}
 		}
 	}
-    
-    	if t, err := p.fetchTrackViaOEmbed(videoID); err == nil && t != nil {
+
+	if t, err := p.fetchTrackViaOEmbed(videoID); err == nil && t != nil {
 		p.cache.Set("track:"+videoID, []*state.Track{t})
 		return []*state.Track{t}, nil
 	}
-    
+
 	return nil, errors.New("track not found")
 }
 
@@ -342,7 +346,8 @@ func (p *YouTubePlatform) performSearch(query string, limit int) ([]*state.Track
 	}
 
 	if err := p.callInnerTube("search", payload, &result); err != nil {
-		return nil, err
+		logger.Warnf("[YouTube] InnerTube search unavailable, using yt-dlp fallback: %v", err)
+		return p.searchViaYtDlp(query, limit)
 	}
 
 	contents, ok := dig(
@@ -374,10 +379,15 @@ func (p *YouTubePlatform) fetchVideo(videoID string) (*state.Track, error) {
 	}
 
 	if err := p.callInnerTube("player", payload, &result); err != nil {
-		return nil, err
+		logger.Warnf("[YouTube] InnerTube player unavailable, using yt-dlp fallback for %s: %v", videoID, err)
+		return p.fetchVideoViaYtDlp(videoID)
 	}
 
 	details, ok := dig(result, "videoDetails").(map[string]any)
+	if !ok {
+		logger.Warnf("[YouTube] videoDetails missing, using yt-dlp fallback for %s", videoID)
+		return p.fetchVideoViaYtDlp(videoID)
+	}
 	if !ok {
 		return nil, errors.New("videoDetails not found")
 	}
@@ -391,6 +401,160 @@ func (p *YouTubePlatform) fetchVideo(videoID string) (*state.Track, error) {
 		Duration: atoi(safeStr(details["lengthSeconds"])),
 		Source:   PlatformYouTube,
 	}, nil
+}
+
+// searchViaYtDlp keeps YouTube search working without any user-provided API key.
+// yt-dlp is already required by the playback downloader, so this is a natural fallback.
+func (p *YouTubePlatform) searchViaYtDlp(query string, limit int) ([]*state.Track, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	searchURL := fmt.Sprintf("ytsearch%d:%s", limit, query)
+
+	baseArgs := []string{
+		"--flat-playlist",
+		"--dump-single-json",
+		"--no-warnings",
+		"--no-check-certificate",
+		"--retries", "3",
+		"--extractor-retries", "3",
+		"--socket-timeout", "30",
+		"--js-runtimes", "deno:/usr/local/bin/deno",
+	}
+	if cookieFile, cookieErr := cookies.GetRandomCookieFile(); cookieErr == nil && strings.TrimSpace(cookieFile) != "" {
+		baseArgs = append(baseArgs, "--cookies", cookieFile)
+		logger.Debug("[YouTube] yt-dlp search using configured cookie file")
+	} else {
+		logger.Debug("[YouTube] yt-dlp search: no cookie file configured; continuing without cookies")
+	}
+
+	clients := []string{"android,web_safari", "android", "web_safari", ""}
+	var lastErr error
+	var out []byte
+	for _, client := range clients {
+		args := append([]string{}, baseArgs...)
+		if client != "" {
+			args = append(args, "--extractor-args", "youtube:player_client="+client)
+		}
+		args = append(args, "--", searchURL)
+
+		cmd := exec.Command("yt-dlp", args...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, lastErr = cmd.Output()
+		if lastErr == nil {
+			break
+		}
+		logger.Warnf("[YouTube] yt-dlp search client %q failed: %v\n%s", client, lastErr, strings.TrimSpace(stderr.String()))
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("yt-dlp search failed: %w", lastErr)
+	}
+
+	var data struct {
+		Entries []struct {
+			ID        string  `json:"id"`
+			Title     string  `json:"title"`
+			Duration  float64 `json:"duration"`
+			Thumbnail string  `json:"thumbnail"`
+			URL       string  `json:"webpage_url"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(out, &data); err != nil {
+		return nil, fmt.Errorf("yt-dlp search returned invalid JSON: %w", err)
+	}
+
+	tracks := make([]*state.Track, 0, len(data.Entries))
+	for _, e := range data.Entries {
+		id := strings.TrimSpace(e.ID)
+		if id == "" {
+			continue
+		}
+		url := e.URL
+		if url == "" {
+			url = "https://www.youtube.com/watch?v=" + id
+		}
+		tracks = append(tracks, &state.Track{
+			URL:      url,
+			Title:    e.Title,
+			ID:       id,
+			Artwork:  e.Thumbnail,
+			Duration: int(e.Duration),
+			Source:   PlatformYouTube,
+		})
+	}
+	if len(tracks) == 0 {
+		return nil, errors.New("yt-dlp search returned no tracks")
+	}
+	return tracks, nil
+}
+
+func (p *YouTubePlatform) fetchVideoViaYtDlp(videoID string) (*state.Track, error) {
+	url := "https://www.youtube.com/watch?v=" + videoID
+
+	baseArgs := []string{
+		"--dump-single-json",
+		"--no-warnings",
+		"--no-check-certificate",
+		"--skip-download",
+		"--retries", "3",
+		"--extractor-retries", "3",
+		"--socket-timeout", "30",
+		"--js-runtimes", "deno:/usr/local/bin/deno",
+	}
+	if cookieFile, cookieErr := cookies.GetRandomCookieFile(); cookieErr == nil && strings.TrimSpace(cookieFile) != "" {
+		baseArgs = append(baseArgs, "--cookies", cookieFile)
+		logger.Debug("[YouTube] yt-dlp metadata using configured cookie file")
+	} else {
+		logger.Debug("[YouTube] yt-dlp metadata: no cookie file configured; continuing without cookies")
+	}
+
+	clients := []string{"android,web_safari", "android", "web_safari", ""}
+	var lastErr error
+	var out []byte
+	for _, client := range clients {
+		args := append([]string{}, baseArgs...)
+		if client != "" {
+			args = append(args, "--extractor-args", "youtube:player_client="+client)
+		}
+		args = append(args, "--", url)
+
+		cmd := exec.Command("yt-dlp", args...)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, lastErr = cmd.Output()
+		if lastErr == nil {
+			break
+		}
+		logger.Warnf("[YouTube] yt-dlp metadata client %q failed: %v\n%s", client, lastErr, strings.TrimSpace(stderr.String()))
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("yt-dlp metadata failed: %w", lastErr)
+	}
+
+	var info ytdlpFallbackInfo
+	if err := json.Unmarshal(out, &info); err != nil {
+		return nil, fmt.Errorf("yt-dlp metadata JSON invalid: %w", err)
+	}
+	id := info.ID
+	if id == "" {
+		id = videoID
+	}
+	return &state.Track{
+		URL:      "https://www.youtube.com/watch?v=" + id,
+		Title:    info.Title,
+		ID:       id,
+		Artwork:  info.Thumbnail,
+		Duration: int(info.Duration),
+		Source:   PlatformYouTube,
+	}, nil
+}
+
+type ytdlpFallbackInfo struct {
+	ID        string  `json:"id"`
+	Title     string  `json:"title"`
+	Duration  float64 `json:"duration"`
+	Thumbnail string  `json:"thumbnail"`
 }
 
 func (p *YouTubePlatform) fetchPlaylist(playlistID string, limit int) ([]*state.Track, error) {

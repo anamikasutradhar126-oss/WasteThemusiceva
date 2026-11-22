@@ -14,15 +14,16 @@
  *
  * Repository: https://github.com/Oyekanhaa/WasteMusic
  */
-
 package modules
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	td "github.com/Kanha/Meow"
@@ -31,6 +32,11 @@ import (
 	"WasteMusic/waste/core"
 	"WasteMusic/waste/database"
 	"WasteMusic/waste/locales"
+)
+
+var (
+	botMentionOnce  sync.Once
+	cachedBotMention string
 )
 
 func sendStartSticker(chatID int64) {
@@ -42,15 +48,72 @@ func sendStartSticker(chatID int64) {
 		"chat_id": {fmt.Sprintf("%d", chatID)},
 		"sticker": {config.StartStickerID},
 	}
-	req, err := http.NewRequest(http.MethodPost,
+
+	req, err := http.NewRequest(
+		http.MethodPost,
 		"https://api.telegram.org/bot"+config.Token+"/sendSticker",
-		bytes.NewBufferString(form.Encode()))
+		bytes.NewBufferString(form.Encode()),
+	)
 	if err != nil {
 		return
 	}
+
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	client := &http.Client{Timeout: 10 * time.Second}
 	_, _ = client.Do(req)
+}
+
+// botMention returns an HTML mention of the actual bot username.
+func botMention() string {
+	botMentionOnce.Do(func() {
+		if config.Token == "" {
+			return
+		}
+
+		req, err := http.NewRequest(
+			http.MethodGet,
+			"https://api.telegram.org/bot"+config.Token+"/getMe",
+			nil,
+		)
+		if err != nil {
+			return
+		}
+
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+
+		var result struct {
+			OK     bool `json:"ok"`
+			Result struct {
+				ID       int64  `json:"id"`
+				Username string `json:"username"`
+			} `json:"result"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return
+		}
+
+		username := strings.TrimSpace(result.Result.Username)
+		if !result.OK || result.Result.ID == 0 || username == "" {
+			return
+		}
+
+		cachedBotMention = td.Mention("@"+username, result.Result.ID, true, true)
+	})
+
+	if cachedBotMention != "" {
+		return cachedBotMention
+	}
+
+	// Fallback if Telegram's getMe is temporarily unavailable.
+	if brand := strings.TrimSpace(config.BotBrand); brand != "" {
+		return brand
+	}
+	return "@Bot"
 }
 
 func startHandler(c *td.Client, m *td.Message) error {
@@ -80,20 +143,24 @@ func startHandler(c *td.Client, m *td.Message) error {
 }
 
 func startCaption(c *td.Client, chatID int64, sender *td.User, fallbackID int64) string {
+	userMention := mentionOf(sender, fallbackID)
+	botUserMention := botMention()
+
 	return fmt.Sprintf(
-		`𝘏𝘌𝘓𝘓𝘖 𝘑 𝘗 𝘌 𝘟 𝘖 🚩, 𝘔𝘠 𝘕𝘈𝘔𝘌 𝘐𝘚 %s.
+		`<blockquote>ʜᴇʟʟᴏ %s 🇮🇳, ᴍʏ ɴᴀᴍᴇ ɪs %s.
 
-𝘐'𝘔 𝘈 𝘛𝘌𝘓𝘌𝘎𝘙𝘈𝘔 𝘚𝘛𝘙𝘌𝘈𝘔𝘐𝘕𝘎 𝘉𝘖𝘛 𝘞𝘐𝘛𝘏 𝘚𝘖𝘔𝘌 𝘜𝘚𝘌𝘍𝘜𝘓 𝘍𝘌𝘈𝘛𝘜𝘙𝘌𝘚. 𝘚𝘜𝘗𝘗𝘖𝘙𝘛𝘐𝘕𝘎 𝘗𝘓𝘈𝘛𝘍𝘖𝘙𝘔𝘚 𝘓𝘐𝘒𝘌 𝘠𝘖𝘜𝘛𝘜𝘉𝘌, 𝘚𝘗𝘖𝘛𝘐𝘍𝘠, 𝘑𝘐𝘖𝘚𝘈𝘈𝘝𝘕, 𝘚𝘖𝘜𝘕𝘋𝘊𝘓𝘖𝘜𝘋 𝘌𝘛𝘊.
+ɪ'ᴍ ᴀ ᴛᴇʟᴇɢʀᴀᴍ sᴛʀᴇᴀᴍɪɴɢ ʙᴏᴛ ᴡɪᴛʜ sᴏᴍᴇ ᴜsᴇғᴜʟ ғᴇᴀᴛᴜʀᴇs. sᴜᴘᴘᴏʀᴛɪɴɢ ᴘʟᴀᴛғᴏʀᴍs ʟɪᴋᴇ ʏᴏᴜᴛᴜʙᴇ, sᴘᴏᴛɪғʏ, ᴊɪᴏsᴀᴀᴠɴ, sᴏᴜɴᴅᴄʟᴏᴜᴅ ᴇᴛᴄ.
 
-𝘍𝘌𝘌𝘓 𝘍𝘙𝘌𝘌 𝘛𝘖 𝘈𝘋𝘋 𝘔𝘌 𝘛𝘖 𝘠𝘖𝘜𝘙 𝘎𝘙𝘖𝘜𝘗𝘚. 👍`,
-		config.BotBrand,
+ғᴇᴇʟ ғʀᴇᴇ ᴛᴏ ᴀᴅᴅ ᴍᴇ ᴛᴏ ʏᴏᴜʀ ɢʀᴏᴜᴘs. 👍</blockquote>`,
+		userMention,
+		botUserMention,
 	)
 }
 
 func handlePmStart(c *td.Client, m *td.Message, sender *td.User) error {
 	caption := startCaption(c, m.ChatID(), sender, m.SenderID())
 
-	// Keep the requested first-step sticker before the branded start media.
+	// Existing first-step sticker remains unchanged.
 	sendStartSticker(m.ChatID())
 
 	video := config.StartVideo()
@@ -133,8 +200,8 @@ func startCB(c *td.Client, cb *td.UpdateNewCallbackQuery) error {
 	if err != nil {
 		return err
 	}
-	sender, _ := msg.GetUser(c)
 
+	sender, _ := msg.GetUser(c)
 	caption := startCaption(c, cb.ChatId, sender, msg.SenderID())
 	markup := core.GetStartMarkup(cb.ChatId)
 
@@ -143,6 +210,7 @@ func startCB(c *td.Client, cb *td.UpdateNewCallbackQuery) error {
 		if ferr != nil {
 			return ferr
 		}
+
 		content := &td.InputMessageVideo{
 			Video: &td.InputVideo{
 				Video:             td.InputFileRemote{Id: video},
@@ -150,6 +218,7 @@ func startCB(c *td.Client, cb *td.UpdateNewCallbackQuery) error {
 			},
 			Caption: formattedCaption,
 		}
+
 		if _, err = c.EditMessageMedia(cb.ChatId, content, msg.Id, &td.EditMessageMediaOpts{
 			ReplyMarkup: markup,
 		}); err == nil {
@@ -187,6 +256,7 @@ func isCaptionMediaMessage(m *td.Message) bool {
 	if m == nil {
 		return false
 	}
+
 	switch m.Content.(type) {
 	case *td.MessagePhoto, *td.MessageVideo:
 		return true
@@ -201,17 +271,22 @@ func isChannel(c *td.Client, m *td.Message) bool {
 	if err != nil {
 		return false
 	}
+
 	sg, ok := chat.Type.(*td.ChatTypeSupergroup)
 	return ok && sg.IsChannel
 }
 
 // mentionOf builds an HTML mention, falling back to a plain "user" mention
-// if sender is nil (e.g. GetUser failed).
-func mentionOf(sender *td.User, fallbackId int64) string {
+// if sender is nil.
+func mentionOf(sender *td.User, fallbackID int64) string {
 	if sender == nil {
-		return mentionOfName("user", fallbackId)
+		return mentionOfName("user", fallbackID)
 	}
-	return mentionOfName(strings.TrimSpace(sender.FirstName+" "+sender.LastName), sender.Id)
+
+	return mentionOfName(
+		strings.TrimSpace(sender.FirstName+" "+sender.LastName),
+		sender.Id,
+	)
 }
 
 // mentionOfName builds an HTML mention for a raw name and user ID.
@@ -220,6 +295,7 @@ func mentionOfName(name string, id int64) string {
 	if name == "" {
 		name = "user"
 	}
+
 	return td.Mention(name, id, true, true)
 }
 
@@ -228,7 +304,11 @@ func mentionOfAssistant(a *core.Assistant) string {
 	if a == nil || a.Self == nil {
 		return "Unknown"
 	}
-	return mentionOfName(strings.TrimSpace(a.Self.FirstName+" "+a.Self.LastName), a.Self.ID)
+
+	return mentionOfName(
+		strings.TrimSpace(a.Self.FirstName+" "+a.Self.LastName),
+		a.Self.ID,
+	)
 }
 
 // logStart reports a bot start to the configured logger chat, if enabled.
