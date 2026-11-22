@@ -50,9 +50,10 @@ func welcomeToggleHandler(c *td.Client, m *td.Message) error {
 		if !enabled {
 			state = "ᴅɪsᴀʙʟᴇᴅ"
 		}
-		return m.ReplyText(c,
+		_, err := m.ReplyText(c,
 			fmt.Sprintf("<blockquote>𝘞𝘦𝘭𝘤𝘰𝘮𝘦 𝘮𝘦𝘴𝘴𝘢𝘨𝘦𝘴: <b>%s</b>\n\n𝘜𝘴𝘢𝘨𝘦:\n<code>/welcome on</code>\n<code>/welcome off</code></blockquote>", state),
 			&td.SendTextMessageOpts{ParseMode: td.ParseModeHTML})
+		return err
 	}
 
 	isAdmin, _ := utils.IsChatAdmin(c, m.ChatID(), m.SenderID())
@@ -68,9 +69,10 @@ func welcomeToggleHandler(c *td.Client, m *td.Message) error {
 	case "off", "disable", "disabled":
 		enabled = false
 	default:
-		return m.ReplyText(c,
+		_, err := m.ReplyText(c,
 			"<blockquote>𝘜𝘴𝘢𝘨𝘦:\n<code>/welcome on</code>\n<code>/welcome off</code></blockquote>",
 			&td.SendTextMessageOpts{ParseMode: td.ParseModeHTML})
+		return err
 	}
 
 	if err := database.SetWelcomeEnabled(m.ChatID(), enabled); err != nil {

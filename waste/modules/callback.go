@@ -300,7 +300,7 @@ func handleSkipAction(c *td.Client, u *td.UpdateNewCallbackQuery, r *core.RoomSt
 	statusMsg = sendNowPlaying(c, statusMsg, chatID, r, t)
 	r.SetStatusMsg(statusMsg)
 
-_, err = statusMsg.ReplyText(c, F(chatID, "cb_skip_edited", locales.Arg{
+	_, err = statusMsg.ReplyText(c, F(chatID, "cb_skip_edited", locales.Arg{
 		"user": mentionOfSender(c, u.SenderUserId),
 	}), &td.SendTextMessageOpts{ParseMode: "HTML"})
 
@@ -428,6 +428,14 @@ func handleUnmuteAction(c *td.Client, u *td.UpdateNewCallbackQuery, r *core.Room
 	return nil
 }
 
+func isPhotoMessage(msg *td.Message) bool {
+	if msg == nil || msg.Content == nil {
+		return false
+	}
+	_, ok := msg.Content.(*td.MessagePhoto)
+	return ok
+}
+
 func updatePlaybackMessage(c *td.Client, u *td.UpdateNewCallbackQuery, r *core.RoomState, state string) {
 	track := r.Track()
 	if track == nil {
@@ -487,4 +495,3 @@ func updatePlaybackMessage(c *td.Client, u *td.UpdateNewCallbackQuery, r *core.R
 		logger.Errorf("Edit error: %v", err)
 	}
 }
-
