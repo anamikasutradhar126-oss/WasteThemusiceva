@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -83,7 +84,12 @@ func (a *ArtistBotsPlatform) Download(
 		return "", fmt.Errorf("ArtistBots: create downloads directory: %w", err)
 	}
 
-	out := getPath(track, ext)
+	typePrefix := "audio"
+	if track.Video {
+		typePrefix = "video"
+	}
+	// Keep the playable filename separate from the in-progress download.
+	out := filepath.Join("downloads", typePrefix+"_"+videoID+ext)
 	tmp := out + ".part"
 	_ = os.Remove(tmp)
 
@@ -169,16 +175,22 @@ func (a *ArtistBotsPlatform) Download(
 		return "", errors.New("ArtistBots API returned a text/JSON error instead of media")
 	}
 
-	if cached := findFile(track); cached != "" {
-		_ = os.Remove(tmp)
-		return cached, nil
-	}
+	// The temporary file must not be discovered by findFile as a cache hit.
+	// Finalize it only after the response has been completely written and validated.
 	_ = os.Remove(out)
 	if err := os.Rename(tmp, out); err != nil {
 		_ = os.Remove(tmp)
 		return "", fmt.Errorf("ArtistBots: finalize downloaded file: %w", err)
 	}
 
-	logger.Infof("ArtistBots API: downloaded %s", out)
+	if strings.HasSuffix(strings.ToLower(out), ".part") {
+		_ = os.Remove(out)
+		return "", errors.New("ArtistBots: refusing to return an incomplete .part file")
+	}
+	if info, statErr := os.Stat(out); statErr != nil || !info.Mode().IsRegular() || info.Size() < 1024 {
+		_ = os.Remove(out)
+		return "", errors.New("ArtistBots: finalized media file is missing or invalid")
+	}
+	logger.Infof("ArtistBots API: downloaded complete media %s", out)
 	return out, nil
 }

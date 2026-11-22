@@ -88,7 +88,13 @@ func findFile(track *state.Track) string {
 		return ""
 	}
 	for _, f := range files {
-		if info, err := os.Stat(f); err == nil && info.Size() > 0 {
+		// Never treat an in-progress download as a playable cache entry.
+		// In particular, ArtistBots writes to "*.part" before atomically
+		// renaming the completed file to its final media extension.
+		if strings.HasSuffix(strings.ToLower(f), ".part") {
+			continue
+		}
+		if info, err := os.Stat(f); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
 			return f
 		}
 	}
