@@ -17,6 +17,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"WasteMusic/waste/database"
+	"WasteMusic/waste/logger"
 )
 
 // WordSeek word lists are sourced from the WordSeek project.
@@ -29,31 +30,59 @@ var wordSeekValid = map[int]map[string]bool{}
 var wordSeekGameColl, wordSeekGuessColl, wordSeekScoreColl *mongo.Collection
 
 func initWordSeek(bot *td.Client) {
-	if err := database.InitWordSeekCollections(); err != nil {
-		return
-	}
+	// Always keep the collection handles and register commands. Index creation
+	// is an optimization; a pre-existing index/duplicate must not silently
+	// disable every WordSeek command at startup.
+	indexErr := database.InitWordSeekCollections()
 	wordSeekGameColl = database.WordSeekGames()
 	wordSeekGuessColl = database.WordSeekGuesses()
 	wordSeekScoreColl = database.WordSeekScores()
+	if indexErr != nil {
+		logger.Errorf("WordSeek index initialization warning: %v", indexErr)
+	}
+	if wordSeekGameColl == nil || wordSeekGuessColl == nil || wordSeekScoreColl == nil {
+		logger.Error("WordSeek is disabled: MongoDB collections are unavailable")
+		return
+	}
+
+	wordFileNames := map[int]string{4: "four", 5: "five", 6: "six"}
 	for _, n := range []int{4, 5, 6} {
-		common, _ := wordSeekData.ReadFile(fmt.Sprintf("wordseek/data/common-%d.json", n))
-		all, _ := wordSeekData.ReadFile(fmt.Sprintf("wordseek/data/all-%d.json", n))
+		wordSize := wordFileNames[n]
+		common, err := wordSeekData.ReadFile(fmt.Sprintf("wordseek/data/common-%s.json", wordSize))
+		if err != nil {
+			logger.Errorf("WordSeek: failed to read common %d-letter words: %v", n, err)
+			continue
+		}
+		all, err := wordSeekData.ReadFile(fmt.Sprintf("wordseek/data/all-%s.json", wordSize))
+		if err != nil {
+			logger.Errorf("WordSeek: failed to read valid %d-letter words: %v", n, err)
+			continue
+		}
 		var commonWords []string
-		_ = json.Unmarshal(common, &commonWords)
-		wordSeekLists[n] = commonWords
+		if err := json.Unmarshal(common, &commonWords); err != nil {
+			logger.Errorf("WordSeek: invalid common %d-letter word list: %v", n, err)
+			continue
+		}
 		var words []string
-		_ = json.Unmarshal(all, &words)
-		wordSeekValid[n] = map[string]bool{}
+		if err := json.Unmarshal(all, &words); err != nil {
+			logger.Errorf("WordSeek: invalid valid-word %d-letter list: %v", n, err)
+			continue
+		}
+		wordSeekLists[n] = commonWords
+		wordSeekValid[n] = make(map[string]bool, len(words))
 		for _, w := range words {
 			wordSeekValid[n][strings.ToLower(w)] = true
 		}
+		logger.Infof("WordSeek loaded %d common and %d valid %d-letter words", len(commonWords), len(words), n)
 	}
-	bot.OnCommand("new4", wordSeekStart(4))
-	bot.OnCommand("new5", wordSeekStart(5))
-	bot.OnCommand("new6", wordSeekStart(6))
-	bot.OnCommand("leaderboard", wordSeekLeaderboard)
+
+	bot.OnCommand("new4", WithBlacklistMessage(wordSeekStart(4)))
+	bot.OnCommand("new5", WithBlacklistMessage(wordSeekStart(5)))
+	bot.OnCommand("new6", WithBlacklistMessage(wordSeekStart(6)))
+	bot.OnCommand("leaderboard", WithBlacklistMessage(wordSeekLeaderboard))
 	bot.OnUpdateNewMessage(wordSeekGuessHandler, nil)
-	bot.OnUpdateNewCallbackQuery(wordSeekCallbackHandler, callbackquery.Regex("^ws:lb:"))
+	bot.OnUpdateNewCallbackQuery(WithBlacklistCallback(wordSeekCallbackHandler), callbackquery.Regex("^ws:lb:"))
+	logger.Info("WordSeek commands registered: /new4, /new5, /new6, /leaderboard")
 }
 
 func wordSeekTopic(msg *td.Message) string {
@@ -85,6 +114,9 @@ func wordSeekName(client *td.Client, id int64) (string, string) {
 }
 func wordSeekStart(length int) func(*td.Client, *td.Message) error {
 	return func(c *td.Client, m *td.Message) error {
+		if wordSeekGameColl == nil {
+			return sendWS(c, m, "WordSeek is unavailable: database is not ready.")
+		}
 		chatID := m.ChatId
 		topic := wordSeekTopic(m)
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -99,7 +131,7 @@ func wordSeekStart(length int) func(*td.Client, *td.Message) error {
 		}
 		words := wordSeekLists[length]
 		if len(words) == 0 {
-			return sendWS(c, m, "Word list is unavailable.")
+			return sendWS(c, m, fmt.Sprintf("%d-letter word list is unavailable. Check the bot deployment files.", length))
 		}
 		solution := strings.ToLower(words[rand.Intn(len(words))])
 		doc := bson.M{"chatId": chatID, "topicId": topic, "word": solution, "wordLength": length, "startedBy": wordSeekSender(m), "createdAt": time.Now()}
@@ -117,6 +149,9 @@ func sendWS(c *td.Client, m *td.Message, text string) error {
 
 func wordSeekGuessHandler(c *td.Client, u *td.UpdateNewMessage) error {
 	if u.Message == nil || u.Message.IsOutgoing || u.Message.IsCommand() {
+		return nil
+	}
+	if wordSeekGameColl == nil || wordSeekGuessColl == nil || wordSeekScoreColl == nil {
 		return nil
 	}
 	guess := strings.ToLower(strings.TrimSpace(u.Message.GetText()))
@@ -218,6 +253,9 @@ func wordSeekFeedback(guess, solution string) string {
 }
 
 func wordSeekLeaderboard(c *td.Client, m *td.Message) error {
+	if wordSeekScoreColl == nil {
+		return sendWS(c, m, "Leaderboard is unavailable: database is not ready.")
+	}
 	args := strings.Fields(m.Args())
 	scope, period, length := "global", "month", 5
 	for _, a := range args {
@@ -233,6 +271,9 @@ func wordSeekLeaderboard(c *td.Client, m *td.Message) error {
 	return wordSeekSendLeaderboard(c, m, scope, period, length)
 }
 func wordSeekSendLeaderboard(c *td.Client, m *td.Message, scope, period string, length int) error {
+	if wordSeekScoreColl == nil {
+		return sendWS(c, m, "Leaderboard is unavailable: database is not ready.")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	match := bson.M{"wordLength": length}
@@ -342,6 +383,10 @@ func wordSeekLeaderboardKeyboard(scope, period string, length int) td.ReplyMarku
 
 func wordSeekCallbackHandler(c *td.Client, u *td.UpdateNewCallbackQuery) error {
 	data := u.DataString()
+	if wordSeekScoreColl == nil {
+		_ = u.Answer(c, 0, true, "Leaderboard database is not ready.", "")
+		return nil
+	}
 	parts := strings.Split(data, ":")
 	if len(parts) != 5 {
 		return nil
