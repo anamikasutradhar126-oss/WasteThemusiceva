@@ -133,6 +133,9 @@ func Download(
 			return path, nil
 		}
 
+		// Log the exact provider failure so API fallbacks are diagnosable.
+		logger.Warnf("Downloader %s failed: %v; trying next provider", p.Name(), err)
+
 		if isDownloadCancelled(err) {
 			return "", err
 		}
