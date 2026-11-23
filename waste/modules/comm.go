@@ -51,10 +51,6 @@ var AllCommands = BotCommands{
 		cmd("removefromplaylist", "➖ Remove a track from a playlist"),
 		cmd("playlistinfo", "ℹ️ Show a playlist's tracks"),
 		cmd("myplaylists", "📚 List your playlists"),
-		cmd("new4", "🎮 Start a 4-letter WordSeek game"),
-		cmd("new5", "🎮 Start a 5-letter WordSeek game"),
-		cmd("new6", "🎮 Start a 6-letter WordSeek game"),
-		cmd("leaderboard", "🏆 View WordSeek leaderboard"),
 	},
 
 	PrivateSudoCommands: []td.BotCommand{
@@ -82,10 +78,6 @@ var AllCommands = BotCommands{
 		cmd("reload", "🔄 Reload the admin cache"),
 		cmd("authlist", "👥 List authorized users"),
 		cmd("repo", "📦 Show source code repository"),
-		cmd("new4", "🎮 Start a 4-letter WordSeek game"),
-		cmd("new5", "🎮 Start a 5-letter WordSeek game"),
-		cmd("new6", "🎮 Start a 6-letter WordSeek game"),
-		cmd("leaderboard", "🏆 View WordSeek leaderboard"),
 	},
 
 	GroupAdminCommands: []td.BotCommand{

@@ -112,8 +112,8 @@ func GetTracks(c *td.Client, m *td.Message, video bool) ([]*state.Track, error) 
 
 // Download fetches the given track and returns its local file path.
 // Registered downloaders are tried in descending priority order.
-// For YouTube tracks, NexorStream (priority 85) is attempted before Shruti (priority 80),
-// then yt-dlp (priority 60) remains as fallback.
+// For YouTube tracks, Shruti (priority 80) is attempted before yt-dlp (priority 60),
+// so a configured SHRUTI_API_KEY is used first and yt-dlp remains the fallback.
 func Download(
 	ctx context.Context,
 	track *state.Track,
@@ -132,9 +132,6 @@ func Download(
 			logger.Info("Download ok via " + string(p.Name()) + " -> " + path)
 			return path, nil
 		}
-
-		// Log the exact provider failure so API fallbacks are diagnosable.
-		logger.Warnf("Downloader %s failed: %v; trying next provider", p.Name(), err)
 
 		if isDownloadCancelled(err) {
 			return "", err

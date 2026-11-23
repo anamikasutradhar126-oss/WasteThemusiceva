@@ -26,7 +26,6 @@ import (
 )
 
 func Init(bot *td.Client, assistants *core.AssistantManager) {
-	initWordSeek(bot)
 	assistants.ForEach(func(a *core.Assistant) {
 		a.Client.UpdatesGetState()
 	})
