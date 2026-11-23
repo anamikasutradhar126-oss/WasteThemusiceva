@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"html"
 	"math/rand"
 	"regexp"
 	"strings"
@@ -218,7 +219,7 @@ func wordSeekGuessHandler(c *td.Client, u *td.UpdateNewMessage) error {
 	}
 	lines := make([]string, 0, len(guesses))
 	for _, g := range guesses {
-		lines = append(lines, wordSeekFeedback(g.Guess, game.Word))
+		lines = append(lines, fmt.Sprintf("%s  %s", strings.ToUpper(g.Guess), wordSeekFeedback(g.Guess, game.Word)))
 	}
 	return sendWS(c, u.Message, fmt.Sprintf("🔤 %d/%d guesses\n%s", len(guesses), 30, strings.Join(lines, "\n")))
 }
@@ -293,7 +294,7 @@ func wordSeekSendLeaderboard(c *td.Client, m *td.Message, scope, period string, 
 		}
 		match["createdAt"] = bson.M{"$gte": start}
 	}
-	pipeline := mongo.Pipeline{{{Key: "$match", Value: match}}, {{Key: "$group", Value: bson.M{"_id": "$userId", "name": bson.M{"$last": "$name"}, "username": bson.M{"$last": "$username"}, "score": bson.M{"$sum": "$score"}}}}, {{Key: "$sort", Value: bson.M{"score": -1}}}, {{Key: "$limit", Value: 20}}}
+	pipeline := mongo.Pipeline{{{Key: "$match", Value: match}}, {{Key: "$sort", Value: bson.M{"createdAt": 1}}}, {{Key: "$group", Value: bson.M{"_id": "$userId", "name": bson.M{"$last": "$name"}, "username": bson.M{"$last": "$username"}, "score": bson.M{"$sum": "$score"}}}}, {{Key: "$sort", Value: bson.M{"score": -1}}}, {{Key: "$limit", Value: 20}}}
 	cur, err := wordSeekScoreColl.Aggregate(ctx, pipeline)
 	if err != nil {
 		return sendWS(c, m, "Leaderboard unavailable right now.")
@@ -319,27 +320,34 @@ func wordSeekSendLeaderboard(c *td.Client, m *td.Message, scope, period string, 
 		}{}
 	}
 	var out strings.Builder
-	out.WriteString(fmt.Sprintf("🏆 %s Leaderboard 🏆\n\n", title))
-	for i, r := range rows {
-		rank := "🔅"
-		if i == 0 {
-			rank = "🥇"
-		} else if i == 1 {
-			rank = "🥈"
-		} else if i == 2 {
-			rank = "🥉"
-		}
-		name := r.Name
-		if name == "" {
-			name = "User"
-		}
-		out.WriteString(fmt.Sprintf("%s %s - %s pts\n", rank, name, formatWSNum(r.Score)))
-	}
+	out.WriteString(fmt.Sprintf("<blockquote>🏆 %s Leaderboard 🏆</blockquote>\n\n", title))
 	if len(rows) == 0 {
 		out.WriteString("No scores yet.")
+	} else {
+		for i, r := range rows {
+			if i == 0 || i == 3 || (i > 3 && (i-3)%10 == 0) {
+				out.WriteString("<blockquote>")
+			}
+			rank := "🔅"
+			if i == 0 {
+				rank = "🥇"
+			} else if i == 1 {
+				rank = "🥈"
+			} else if i == 2 {
+				rank = "🥉"
+			}
+			name := strings.TrimSpace(r.Name)
+			if name == "" {
+				name = "User"
+			}
+			out.WriteString(fmt.Sprintf("%s %s - %s pts\n", rank, html.EscapeString(name), formatWSNum(r.Score)))
+			if i == 2 || i == len(rows)-1 || (i > 3 && (i-3)%10 == 9) {
+				out.WriteString("</blockquote>\n")
+			}
+		}
 	}
 	kb := wordSeekLeaderboardKeyboard(scope, period, length)
-	_, err = c.SendTextMessage(m.ChatId, out.String(), &td.SendTextMessageOpts{ReplyMarkup: kb})
+	_, err = c.SendTextMessage(m.ChatId, out.String(), &td.SendTextMessageOpts{ReplyMarkup: kb, ParseMode: td.ParseModeHTML})
 	return err
 }
 func formatWSNum(n int) string {
@@ -420,15 +428,16 @@ func wordSeekCallbackHandler(c *td.Client, u *td.UpdateNewCallbackQuery) error {
 		}
 		match["createdAt"] = bson.M{"$gte": start}
 	}
-	pipeline := mongo.Pipeline{{{Key: "$match", Value: match}}, {{Key: "$group", Value: bson.M{"_id": "$userId", "name": bson.M{"$last": "$name"}, "username": bson.M{"$last": "$username"}, "score": bson.M{"$sum": "$score"}}}}, {{Key: "$sort", Value: bson.M{"score": -1}}}, {{Key: "$limit", Value: 20}}}
+	pipeline := mongo.Pipeline{{{Key: "$match", Value: match}}, {{Key: "$sort", Value: bson.M{"createdAt": 1}}}, {{Key: "$group", Value: bson.M{"_id": "$userId", "name": bson.M{"$last": "$name"}, "username": bson.M{"$last": "$username"}, "score": bson.M{"$sum": "$score"}}}}, {{Key: "$sort", Value: bson.M{"score": -1}}}, {{Key: "$limit", Value: 20}}}
 	cur, err := wordSeekScoreColl.Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil
 	}
 	defer cur.Close(ctx)
 	var rows []struct {
-		Name  string `bson:"name"`
-		Score int    `bson:"score"`
+		Name     string `bson:"name"`
+		Username string `bson:"username"`
+		Score    int    `bson:"score"`
 	}
 	_ = cur.All(ctx, &rows)
 	title := "Global"
@@ -436,22 +445,33 @@ func wordSeekCallbackHandler(c *td.Client, u *td.UpdateNewCallbackQuery) error {
 		title = "This chat"
 	}
 	var out strings.Builder
-	out.WriteString(fmt.Sprintf("🏆 %s Leaderboard 🏆\n\n", title))
-	for i, r := range rows {
-		rank := "🔅"
-		if i == 0 {
-			rank = "🥇"
-		} else if i == 1 {
-			rank = "🥈"
-		} else if i == 2 {
-			rank = "🥉"
-		}
-		out.WriteString(fmt.Sprintf("%s %s - %s pts\n", rank, r.Name, formatWSNum(r.Score)))
-	}
+	out.WriteString(fmt.Sprintf("<blockquote>🏆 %s Leaderboard 🏆</blockquote>\n\n", title))
 	if len(rows) == 0 {
 		out.WriteString("No scores yet.")
+	} else {
+		for i, r := range rows {
+			if i == 0 || i == 3 || (i > 3 && (i-3)%10 == 0) {
+				out.WriteString("<blockquote>")
+			}
+			rank := "🔅"
+			if i == 0 {
+				rank = "🥇"
+			} else if i == 1 {
+				rank = "🥈"
+			} else if i == 2 {
+				rank = "🥉"
+			}
+			name := strings.TrimSpace(r.Name)
+			if name == "" {
+				name = "User"
+			}
+			out.WriteString(fmt.Sprintf("%s %s - %s pts\n", rank, html.EscapeString(name), formatWSNum(r.Score)))
+			if i == 2 || i == len(rows)-1 || (i > 3 && (i-3)%10 == 9) {
+				out.WriteString("</blockquote>\n")
+			}
+		}
 	}
-	_, _ = u.EditMessageText(c, out.String(), &td.EditTextMessageOpts{ReplyMarkup: wordSeekLeaderboardKeyboard(scope, period, length)})
+	_, _ = u.EditMessageText(c, out.String(), &td.EditTextMessageOpts{ReplyMarkup: wordSeekLeaderboardKeyboard(scope, period, length), ParseMode: td.ParseModeHTML})
 	_ = u.Answer(c, 0, false, "", "")
 	return nil
 }
