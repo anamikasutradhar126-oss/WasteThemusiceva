@@ -55,11 +55,11 @@ var (
 	CookiesFile    = getEnv("COOKIES_FILE", "")
 
 	// Nexor stream API downloader; Shruti and yt-dlp remain fallback providers.
-	NexorStreamURL = getEnv("NEXOR_STREAM_URL", "https://nexor-yt-pannl.lovable.app")
-	NexorStreamKey = getEnv("NEXOR_STREAM_KEY", "NEXOR_3481fsghsh62ghs")
-	EnableAPI      = getEnvBool("ENABLE_API", true)
+	NexorStreamURL   = getEnv("NEXOR_STREAM_URL", "https://nexor-yt-pannl.lovable.app")
+	NexorStreamKey   = getEnv("NEXOR_STREAM_KEY", "")
+	EnableAPI        = getEnvBool("ENABLE_API", true)
 	APITimeout       = getEnvInt("API_TIMEOUT", 60)
-	APIStreamTimeout = getEnvInt("API_STREAM_TIMEOUT", 300)
+	APIStreamTimeout = getEnvInt("API_STREAM_TIMEOUT", 180)
 	SetCmds          = getEnvBool("SET_CMDS", false)
 	MaxAuthUsers     = getEnvInt("MAX_AUTH_USERS", 25)
 
