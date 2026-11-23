@@ -5,7 +5,6 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	"html"
 	"math/rand"
 	"regexp"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"WasteMusic/waste/database"
-	"WasteMusic/waste/logger"
 )
 
 // WordSeek word lists are sourced from the WordSeek project.
@@ -31,59 +29,31 @@ var wordSeekValid = map[int]map[string]bool{}
 var wordSeekGameColl, wordSeekGuessColl, wordSeekScoreColl *mongo.Collection
 
 func initWordSeek(bot *td.Client) {
-	// Always keep the collection handles and register commands. Index creation
-	// is an optimization; a pre-existing index/duplicate must not silently
-	// disable every WordSeek command at startup.
-	indexErr := database.InitWordSeekCollections()
+	if err := database.InitWordSeekCollections(); err != nil {
+		return
+	}
 	wordSeekGameColl = database.WordSeekGames()
 	wordSeekGuessColl = database.WordSeekGuesses()
 	wordSeekScoreColl = database.WordSeekScores()
-	if indexErr != nil {
-		logger.Errorf("WordSeek index initialization warning: %v", indexErr)
-	}
-	if wordSeekGameColl == nil || wordSeekGuessColl == nil || wordSeekScoreColl == nil {
-		logger.Error("WordSeek is disabled: MongoDB collections are unavailable")
-		return
-	}
-
-	wordFileNames := map[int]string{4: "four", 5: "five", 6: "six"}
 	for _, n := range []int{4, 5, 6} {
-		wordSize := wordFileNames[n]
-		common, err := wordSeekData.ReadFile(fmt.Sprintf("wordseek/data/common-%s.json", wordSize))
-		if err != nil {
-			logger.Errorf("WordSeek: failed to read common %d-letter words: %v", n, err)
-			continue
-		}
-		all, err := wordSeekData.ReadFile(fmt.Sprintf("wordseek/data/all-%s.json", wordSize))
-		if err != nil {
-			logger.Errorf("WordSeek: failed to read valid %d-letter words: %v", n, err)
-			continue
-		}
+		common, _ := wordSeekData.ReadFile(fmt.Sprintf("wordseek/data/common-%d.json", n))
+		all, _ := wordSeekData.ReadFile(fmt.Sprintf("wordseek/data/all-%d.json", n))
 		var commonWords []string
-		if err := json.Unmarshal(common, &commonWords); err != nil {
-			logger.Errorf("WordSeek: invalid common %d-letter word list: %v", n, err)
-			continue
-		}
-		var words []string
-		if err := json.Unmarshal(all, &words); err != nil {
-			logger.Errorf("WordSeek: invalid valid-word %d-letter list: %v", n, err)
-			continue
-		}
+		_ = json.Unmarshal(common, &commonWords)
 		wordSeekLists[n] = commonWords
-		wordSeekValid[n] = make(map[string]bool, len(words))
+		var words []string
+		_ = json.Unmarshal(all, &words)
+		wordSeekValid[n] = map[string]bool{}
 		for _, w := range words {
 			wordSeekValid[n][strings.ToLower(w)] = true
 		}
-		logger.Infof("WordSeek loaded %d common and %d valid %d-letter words", len(commonWords), len(words), n)
 	}
-
-	bot.OnCommand("new4", WithBlacklistMessage(wordSeekStart(4)))
-	bot.OnCommand("new5", WithBlacklistMessage(wordSeekStart(5)))
-	bot.OnCommand("new6", WithBlacklistMessage(wordSeekStart(6)))
-	bot.OnCommand("leaderboard", WithBlacklistMessage(wordSeekLeaderboard))
+	bot.OnCommand("new4", wordSeekStart(4))
+	bot.OnCommand("new5", wordSeekStart(5))
+	bot.OnCommand("new6", wordSeekStart(6))
+	bot.OnCommand("leaderboard", wordSeekLeaderboard)
 	bot.OnUpdateNewMessage(wordSeekGuessHandler, nil)
-	bot.OnUpdateNewCallbackQuery(WithBlacklistCallback(wordSeekCallbackHandler), callbackquery.Regex("^ws:lb:"))
-	logger.Info("WordSeek commands registered: /new4, /new5, /new6, /leaderboard")
+	bot.OnUpdateNewCallbackQuery(wordSeekCallbackHandler, callbackquery.Regex("^ws:lb:"))
 }
 
 func wordSeekTopic(msg *td.Message) string {
@@ -115,9 +85,6 @@ func wordSeekName(client *td.Client, id int64) (string, string) {
 }
 func wordSeekStart(length int) func(*td.Client, *td.Message) error {
 	return func(c *td.Client, m *td.Message) error {
-		if wordSeekGameColl == nil {
-			return sendWS(c, m, "WordSeek is unavailable: database is not ready.")
-		}
 		chatID := m.ChatId
 		topic := wordSeekTopic(m)
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -132,7 +99,7 @@ func wordSeekStart(length int) func(*td.Client, *td.Message) error {
 		}
 		words := wordSeekLists[length]
 		if len(words) == 0 {
-			return sendWS(c, m, fmt.Sprintf("%d-letter word list is unavailable. Check the bot deployment files.", length))
+			return sendWS(c, m, "Word list is unavailable.")
 		}
 		solution := strings.ToLower(words[rand.Intn(len(words))])
 		doc := bson.M{"chatId": chatID, "topicId": topic, "word": solution, "wordLength": length, "startedBy": wordSeekSender(m), "createdAt": time.Now()}
@@ -150,9 +117,6 @@ func sendWS(c *td.Client, m *td.Message, text string) error {
 
 func wordSeekGuessHandler(c *td.Client, u *td.UpdateNewMessage) error {
 	if u.Message == nil || u.Message.IsOutgoing || u.Message.IsCommand() {
-		return nil
-	}
-	if wordSeekGameColl == nil || wordSeekGuessColl == nil || wordSeekScoreColl == nil {
 		return nil
 	}
 	guess := strings.ToLower(strings.TrimSpace(u.Message.GetText()))
@@ -219,7 +183,7 @@ func wordSeekGuessHandler(c *td.Client, u *td.UpdateNewMessage) error {
 	}
 	lines := make([]string, 0, len(guesses))
 	for _, g := range guesses {
-		lines = append(lines, fmt.Sprintf("%s  %s", strings.ToUpper(g.Guess), wordSeekFeedback(g.Guess, game.Word)))
+		lines = append(lines, wordSeekFeedback(g.Guess, game.Word))
 	}
 	return sendWS(c, u.Message, fmt.Sprintf("🔤 %d/%d guesses\n%s", len(guesses), 30, strings.Join(lines, "\n")))
 }
@@ -254,9 +218,6 @@ func wordSeekFeedback(guess, solution string) string {
 }
 
 func wordSeekLeaderboard(c *td.Client, m *td.Message) error {
-	if wordSeekScoreColl == nil {
-		return sendWS(c, m, "Leaderboard is unavailable: database is not ready.")
-	}
 	args := strings.Fields(m.Args())
 	scope, period, length := "global", "month", 5
 	for _, a := range args {
@@ -272,9 +233,6 @@ func wordSeekLeaderboard(c *td.Client, m *td.Message) error {
 	return wordSeekSendLeaderboard(c, m, scope, period, length)
 }
 func wordSeekSendLeaderboard(c *td.Client, m *td.Message, scope, period string, length int) error {
-	if wordSeekScoreColl == nil {
-		return sendWS(c, m, "Leaderboard is unavailable: database is not ready.")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	match := bson.M{"wordLength": length}
@@ -294,7 +252,7 @@ func wordSeekSendLeaderboard(c *td.Client, m *td.Message, scope, period string, 
 		}
 		match["createdAt"] = bson.M{"$gte": start}
 	}
-	pipeline := mongo.Pipeline{{{Key: "$match", Value: match}}, {{Key: "$sort", Value: bson.M{"createdAt": 1}}}, {{Key: "$group", Value: bson.M{"_id": "$userId", "name": bson.M{"$last": "$name"}, "username": bson.M{"$last": "$username"}, "score": bson.M{"$sum": "$score"}}}}, {{Key: "$sort", Value: bson.M{"score": -1}}}, {{Key: "$limit", Value: 20}}}
+	pipeline := mongo.Pipeline{{{Key: "$match", Value: match}}, {{Key: "$group", Value: bson.M{"_id": "$userId", "name": bson.M{"$last": "$name"}, "username": bson.M{"$last": "$username"}, "score": bson.M{"$sum": "$score"}}}}, {{Key: "$sort", Value: bson.M{"score": -1}}}, {{Key: "$limit", Value: 20}}}
 	cur, err := wordSeekScoreColl.Aggregate(ctx, pipeline)
 	if err != nil {
 		return sendWS(c, m, "Leaderboard unavailable right now.")
@@ -320,34 +278,27 @@ func wordSeekSendLeaderboard(c *td.Client, m *td.Message, scope, period string, 
 		}{}
 	}
 	var out strings.Builder
-	out.WriteString(fmt.Sprintf("<blockquote>🏆 %s Leaderboard 🏆</blockquote>\n\n", title))
+	out.WriteString(fmt.Sprintf("🏆 %s Leaderboard 🏆\n\n", title))
+	for i, r := range rows {
+		rank := "🔅"
+		if i == 0 {
+			rank = "🥇"
+		} else if i == 1 {
+			rank = "🥈"
+		} else if i == 2 {
+			rank = "🥉"
+		}
+		name := r.Name
+		if name == "" {
+			name = "User"
+		}
+		out.WriteString(fmt.Sprintf("%s %s - %s pts\n", rank, name, formatWSNum(r.Score)))
+	}
 	if len(rows) == 0 {
 		out.WriteString("No scores yet.")
-	} else {
-		for i, r := range rows {
-			if i == 0 || i == 3 || (i > 3 && (i-3)%10 == 0) {
-				out.WriteString("<blockquote>")
-			}
-			rank := "🔅"
-			if i == 0 {
-				rank = "🥇"
-			} else if i == 1 {
-				rank = "🥈"
-			} else if i == 2 {
-				rank = "🥉"
-			}
-			name := strings.TrimSpace(r.Name)
-			if name == "" {
-				name = "User"
-			}
-			out.WriteString(fmt.Sprintf("%s %s - %s pts\n", rank, html.EscapeString(name), formatWSNum(r.Score)))
-			if i == 2 || i == len(rows)-1 || (i > 3 && (i-3)%10 == 9) {
-				out.WriteString("</blockquote>\n")
-			}
-		}
 	}
 	kb := wordSeekLeaderboardKeyboard(scope, period, length)
-	_, err = c.SendTextMessage(m.ChatId, out.String(), &td.SendTextMessageOpts{ReplyMarkup: kb, ParseMode: td.ParseModeHTML})
+	_, err = c.SendTextMessage(m.ChatId, out.String(), &td.SendTextMessageOpts{ReplyMarkup: kb})
 	return err
 }
 func formatWSNum(n int) string {
@@ -391,10 +342,6 @@ func wordSeekLeaderboardKeyboard(scope, period string, length int) td.ReplyMarku
 
 func wordSeekCallbackHandler(c *td.Client, u *td.UpdateNewCallbackQuery) error {
 	data := u.DataString()
-	if wordSeekScoreColl == nil {
-		_ = u.Answer(c, 0, true, "Leaderboard database is not ready.", "")
-		return nil
-	}
 	parts := strings.Split(data, ":")
 	if len(parts) != 5 {
 		return nil
@@ -428,16 +375,15 @@ func wordSeekCallbackHandler(c *td.Client, u *td.UpdateNewCallbackQuery) error {
 		}
 		match["createdAt"] = bson.M{"$gte": start}
 	}
-	pipeline := mongo.Pipeline{{{Key: "$match", Value: match}}, {{Key: "$sort", Value: bson.M{"createdAt": 1}}}, {{Key: "$group", Value: bson.M{"_id": "$userId", "name": bson.M{"$last": "$name"}, "username": bson.M{"$last": "$username"}, "score": bson.M{"$sum": "$score"}}}}, {{Key: "$sort", Value: bson.M{"score": -1}}}, {{Key: "$limit", Value: 20}}}
+	pipeline := mongo.Pipeline{{{Key: "$match", Value: match}}, {{Key: "$group", Value: bson.M{"_id": "$userId", "name": bson.M{"$last": "$name"}, "username": bson.M{"$last": "$username"}, "score": bson.M{"$sum": "$score"}}}}, {{Key: "$sort", Value: bson.M{"score": -1}}}, {{Key: "$limit", Value: 20}}}
 	cur, err := wordSeekScoreColl.Aggregate(ctx, pipeline)
 	if err != nil {
 		return nil
 	}
 	defer cur.Close(ctx)
 	var rows []struct {
-		Name     string `bson:"name"`
-		Username string `bson:"username"`
-		Score    int    `bson:"score"`
+		Name  string `bson:"name"`
+		Score int    `bson:"score"`
 	}
 	_ = cur.All(ctx, &rows)
 	title := "Global"
@@ -445,33 +391,22 @@ func wordSeekCallbackHandler(c *td.Client, u *td.UpdateNewCallbackQuery) error {
 		title = "This chat"
 	}
 	var out strings.Builder
-	out.WriteString(fmt.Sprintf("<blockquote>🏆 %s Leaderboard 🏆</blockquote>\n\n", title))
+	out.WriteString(fmt.Sprintf("🏆 %s Leaderboard 🏆\n\n", title))
+	for i, r := range rows {
+		rank := "🔅"
+		if i == 0 {
+			rank = "🥇"
+		} else if i == 1 {
+			rank = "🥈"
+		} else if i == 2 {
+			rank = "🥉"
+		}
+		out.WriteString(fmt.Sprintf("%s %s - %s pts\n", rank, r.Name, formatWSNum(r.Score)))
+	}
 	if len(rows) == 0 {
 		out.WriteString("No scores yet.")
-	} else {
-		for i, r := range rows {
-			if i == 0 || i == 3 || (i > 3 && (i-3)%10 == 0) {
-				out.WriteString("<blockquote>")
-			}
-			rank := "🔅"
-			if i == 0 {
-				rank = "🥇"
-			} else if i == 1 {
-				rank = "🥈"
-			} else if i == 2 {
-				rank = "🥉"
-			}
-			name := strings.TrimSpace(r.Name)
-			if name == "" {
-				name = "User"
-			}
-			out.WriteString(fmt.Sprintf("%s %s - %s pts\n", rank, html.EscapeString(name), formatWSNum(r.Score)))
-			if i == 2 || i == len(rows)-1 || (i > 3 && (i-3)%10 == 9) {
-				out.WriteString("</blockquote>\n")
-			}
-		}
 	}
-	_, _ = u.EditMessageText(c, out.String(), &td.EditTextMessageOpts{ReplyMarkup: wordSeekLeaderboardKeyboard(scope, period, length), ParseMode: td.ParseModeHTML})
+	_, _ = u.EditMessageText(c, out.String(), &td.EditTextMessageOpts{ReplyMarkup: wordSeekLeaderboardKeyboard(scope, period, length)})
 	_ = u.Answer(c, 0, false, "", "")
 	return nil
 }
